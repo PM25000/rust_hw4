@@ -50,33 +50,6 @@ unsafe fn vtable_drop(_ptr: *const ()) {
     println!("vtable_drop");
 }
 
-fn block_on<F: Future>(future: F) -> F::Output {
-    let mut fut = std::pin::pin!(future);
-    let signal = Arc::new(Signal::new());
-    let waker = Waker::from(signal.clone());
-
-    let mut cx = Context::from_waker(&waker);
-    // loop {
-    //     if let Poll::Ready(val) = fut.as_mut().poll(&mut cx) {
-    //         return val;
-    //     }
-    // }
-
-    let runnable = Mutex::new(VecDeque::with_capacity(1024));
-    SIGNAL.set(&signal, || {
-        RUNNABLE.set(&runnable, || loop {
-            if let Poll::Ready(output) = fut.as_mut().poll(&mut cx) {
-                return output;
-            }
-            while let Some(task) = runnable.lock().unwrap().pop_front() {
-                let waker = Waker::from(task.clone());
-                let mut cx = Context::from_waker(&waker);
-                task.future.borrow_mut().as_mut().poll(&mut cx);
-            }
-            signal.wait();
-        })
-    })
-}
 
 struct Signal {
     state: Mutex<State>,
@@ -139,6 +112,51 @@ impl Signal {
     }
 }
 
+fn block_on<F: Future>(future: F) -> F::Output {
+    let mut fut = std::pin::pin!(future);
+    let signal = Arc::new(Signal::new());
+    let waker = Waker::from(signal.clone());
+
+    let mut cx = Context::from_waker(&waker);
+    // loop {
+    //     if let Poll::Ready(val) = fut.as_mut().poll(&mut cx) {
+    //         return val;
+    //     }
+    // }
+
+    let runnable = Mutex::new(VecDeque::with_capacity(1024));
+    SIGNAL.set(&signal, || {
+        RUNNABLE.set(&runnable, || loop {
+            if let Poll::Ready(output) = fut.as_mut().poll(&mut cx) {
+                return output;
+            }
+            while let Some(task) = runnable.lock().unwrap().pop_front() {
+                let waker = Waker::from(task.clone());
+                let mut cx = Context::from_waker(&waker);
+                let _ = task.future.borrow_mut().as_mut().poll(&mut cx);
+            }
+            signal.wait();
+        })
+    })
+}
+
+fn spawn<F: Future<Output = ()> + 'static + Send>(future: F) {
+    let signal = Arc::new(Signal::new());
+    let waker = Waker::from(signal.clone());
+    let task = Arc::new(Task {
+        future: RefCell::new(Box::pin(future)),
+        signal: signal.clone(),
+    });
+    let mut cx = Context::from_waker(&waker);
+    if let Poll::Ready(_) = task.future.borrow_mut().as_mut().poll(&mut cx) {
+        return;
+    }
+    RUNNABLE.with(|runnable| {
+        runnable.lock().unwrap().push_back(task);
+        signal.notify();
+    })
+}
+
 async fn demo() {
     let (tx, rx) = async_channel::bounded::<()>(1);
     std::thread::spawn(move || {
@@ -151,14 +169,17 @@ async fn demo() {
 }
 
 async fn demo1() {
-    let (tx,rx) = async_channel::bounded::<()>(1);
+    let (tx, rx) = async_channel::bounded::<()>(1);
     println!("Hello, world!222");
-    async_std::task::spawn(demo2(tx));
+    spawn(demo2(tx));
     println!("Hello, world!444");
     let _ = rx.recv().await;
 }
 
 async fn demo2(tx: async_channel::Sender<()>) {
+    println!("Hello, world!333");
+    println!("Hello, world!333");
+    println!("Hello, world!333");
     println!("Hello, world!333");
     tx.send(()).await.unwrap();
 }
