@@ -171,17 +171,17 @@ async fn demo() {
 async fn demo1() {
     let (tx, rx) = async_channel::bounded::<()>(1);
     println!("Hello, world!222");
-    spawn(demo2(tx));
+    spawn(demo2(rx));
     println!("Hello, world!444");
-    let _ = rx.recv().await;
+    tx.send(()).await.unwrap();
 }
 
-async fn demo2(tx: async_channel::Sender<()>) {
+async fn demo2(rx: async_channel::Receiver<()>) {
     println!("Hello, world!333");
+    rx.recv().await.unwrap();
     println!("Hello, world!333");
-    println!("Hello, world!333");
-    println!("Hello, world!333");
-    tx.send(()).await.unwrap();
+
+    // tx.send(()).await.unwrap();
 }
 
 struct Task {
